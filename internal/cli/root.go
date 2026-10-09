@@ -73,7 +73,7 @@ func NewRootCmd() *cobra.Command {
   devtools doctor                       check the local prerequisites
 
 Every mutating command honours --dry-run, which prints what would happen
-(including the generated AppleScript, plist, or crontab) and changes nothing.
+(the Graph request, the AppleScript, the plist, the crontab line) and changes nothing.
 Every diagnostic command honours --json and sets a meaningful exit code, so it
 drops straight into a launchd agent or a cron entry.`,
 		SilenceUsage:      true,
