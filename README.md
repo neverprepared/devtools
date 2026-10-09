@@ -45,6 +45,23 @@ make check                # go vet + go test
 Use the **absolute** path (`~/.local/bin/devtools`) in launchd and cron entries:
 neither runs with your shell's `PATH`.
 
+### Signing
+
+The darwin binaries in a release are signed with a Developer ID Application
+certificate and submitted to Apple's notary service, so a copy downloaded
+through a browser is not blocked by Gatekeeper. Check a binary yourself:
+
+```sh
+codesign --verify --strict --verbose=2 ./devtools
+codesign -dv ./devtools 2>&1 | grep Authority
+```
+
+A bare command-line binary cannot carry a stapled notarization ticket -
+`xcrun stapler` only handles `.app`, `.pkg` and `.dmg` - so `stapler validate`
+reports no ticket and `spctl --assess` says "does not seem to be an app". Both
+are expected. The ticket lives on Apple's servers and Gatekeeper checks it
+online. Binaries you build yourself, including via `go install`, are unsigned.
+
 ### Platform support
 
 `web check` and `cron` are portable. `teams`, `launchd`, and the

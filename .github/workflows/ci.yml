@@ -47,6 +47,17 @@ jobs:
       - name: go test
         run: go test ./...
 
+  lint-scripts:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # The signing script only runs at tag time, so lint it on every PR
+      # rather than discovering a typo during a release.
+      - name: shellcheck
+        run: shellcheck scripts/*.sh
+
   cross-build:
     name: cross-build release targets
     runs-on: ubuntu-latest

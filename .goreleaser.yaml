@@ -11,15 +11,16 @@ before:
     # go.sum leaves the tree dirty, which GoReleaser refuses to release from.
     - go mod download
 
+# Split by OS purely so binary_signs can target the darwin artifacts; the
+# build settings are otherwise identical.
 builds:
-  - id: devtools
+  - id: darwin
     main: .
     binary: devtools
     env:
       - CGO_ENABLED=0
     goos:
       - darwin
-      - linux
     goarch:
       - amd64
       - arm64
@@ -29,10 +30,38 @@ builds:
       # Must match the Makefile's stamp target, or `devtools version` reports "dev".
       - -s -w -X github.com/neverprepared/devtools/internal/cli.version={{ .Version }}
 
+  - id: linux
+    main: .
+    binary: devtools
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X github.com/neverprepared/devtools/internal/cli.version={{ .Version }}
+
+# Codesign + notarize each darwin binary before it is archived. The signature
+# is embedded in the Mach-O, so the tar.gz carries it. The script no-ops when
+# MACOS_IDENTITY is unset, keeping `--snapshot` usable without credentials.
+binary_signs:
+  - id: macos
+    ids:
+      - darwin
+    cmd: ./scripts/sign-and-notarize.sh
+    args:
+      - "${artifact}"
+    artifacts: binary
+
 archives:
   - id: devtools
     ids:
-      - devtools
+      - darwin
+      - linux
     formats:
       - tar.gz
     name_template: >-
