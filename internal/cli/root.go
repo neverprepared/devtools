@@ -4,6 +4,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"runtime/debug"
 
 	"github.com/spf13/cobra"
 )
@@ -12,6 +13,25 @@ import (
 //
 //	go build -ldflags "-X github.com/neverprepared/devtools/internal/cli.version=1.2.3"
 var version = "dev"
+
+// buildVersion reports the version to print. The ldflags stamp wins, since
+// that is what the Makefile and GoReleaser set. Failing that, fall back to the
+// module version the go tool embeds: `go install ...@v0.1.0` cannot pass
+// ldflags, so without this that install path reports a useless "dev".
+func buildVersion() string {
+	if version != "dev" {
+		return version
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return version
+	}
+	// "(devel)" is what a local `go build` with no module version reports.
+	if v := info.Main.Version; v != "" && v != "(devel)" {
+		return v
+	}
+	return version
+}
 
 // globals holds the flags shared by every subcommand.
 type globals struct {
@@ -83,7 +103,7 @@ func newVersionCmd() *cobra.Command {
 		Short: "Print the devtools version",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			_, err := fmt.Fprintln(cmd.OutOrStdout(), version)
+			_, err := fmt.Fprintln(cmd.OutOrStdout(), buildVersion())
 			return err
 		},
 	}
