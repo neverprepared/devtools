@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+# Read-only by default; the release job widens this for itself below.
+permissions:
+  contents: read
+
+jobs:
+  # Gate the release on the same checks CI runs. A tag that fails here
+  # produces no release at all, which is the point.
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./...
+
+  release:
+    name: goreleaser
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      # REQUIRED. This org's default GITHUB_TOKEN is read-only, and the
+      # release upload fails with "Resource not accessible by integration"
+      # without it. Note Actions runs the workflow file as of the TAGGED
+      # commit, so a fix here must land on main before the tag is pushed.
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # GoReleaser derives the changelog from history and needs the tags.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

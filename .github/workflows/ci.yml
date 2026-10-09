@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Hosted runners, not the org's self-hosted macOS pool: minutes are
+        # free on a public repo, and this tool's own domain is the keychain,
+        # launchd and crontab - not something to exercise on a persistent host.
+        os: [macos-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::these files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./...
+
+  cross-build:
+    name: cross-build release targets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Catches a cross-compile break on a PR, rather than at tag time when
+      # the release workflow is already running.
+      - name: build every released target
+        run: |
+          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+            echo "::group::$target"
+            GOOS="${target%/*}" GOARCH="${target#*/}" CGO_ENABLED=0 \
+              go build -trimpath -o /dev/null .
+            echo "::endgroup::"
+          done

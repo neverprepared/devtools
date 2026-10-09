@@ -1,0 +1,91 @@
+# GoReleaser builds, archives and publishes the release artifacts.
+# Validate changes with `goreleaser check`, and dry-run the whole release
+# with `goreleaser release --snapshot --clean` BEFORE pushing a tag.
+version: 2
+
+project_name: devtools
+
+before:
+  hooks:
+    # Deliberately `download` and not `go mod tidy`: a tidy that rewrites
+    # go.sum leaves the tree dirty, which GoReleaser refuses to release from.
+    - go mod download
+
+builds:
+  - id: devtools
+    main: .
+    binary: devtools
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      # Must match the Makefile's stamp target, or `devtools version` reports "dev".
+      - -s -w -X github.com/neverprepared/devtools/internal/cli.version={{ .Version }}
+
+archives:
+  - id: devtools
+    ids:
+      - devtools
+    formats:
+      - tar.gz
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - "Merge pull request"
+      - "Merge branch"
+
+release:
+  github:
+    owner: neverprepared
+    name: devtools
+  draft: false
+  prerelease: auto
+  footer: |
+    ## Install
+
+    ```sh
+    go install github.com/neverprepared/devtools@{{ .Tag }}
+    ```
+
+    Or download an archive below and put the binary on your `PATH`:
+
+    ```sh
+    tar xzf devtools_{{ .Version }}_darwin_arm64.tar.gz
+    install -m 755 devtools ~/.local/bin/devtools
+    ```
+
+    Verify it against `checksums.txt`:
+
+    ```sh
+    shasum -a 256 -c checksums.txt --ignore-missing
+    ```
+
+    **Platform support.** `web check` and `cron` work anywhere. `teams`,
+    `launchd`, and the keychain-reading side of `ca` require macOS and exit
+    with a clear "requires macOS" error elsewhere.
