@@ -272,9 +272,6 @@ Expired certificates are dropped unless you pass `--keep-expired`.
 
 ## `devtools teams` - presence
 
-Teams exposes no local API for presence, so devtools types the matching slash
-command into the Teams command box (`Cmd+E`) with AppleScript.
-
 ```sh
 devtools teams away
 devtools teams busy
@@ -284,28 +281,68 @@ devtools teams brb
 devtools teams offline
 
 devtools teams set dnd            # by name or alias
-devtools teams statuses           # list what's available
-devtools teams away -n            # print the AppleScript, change nothing
+devtools teams clear              # hand presence back to Teams
+devtools teams statuses           # list what's available, in both vocabularies
+devtools teams away -n            # print the request, change nothing
 ```
 
-Focus is returned to whatever app was frontmost when the presence change
-finishes. Pass `--no-restore` to leave Teams in front.
+Two transports, selected with `--via`:
 
-Timeboxed presence, which blocks until the timer elapses:
+| | `graph` (default) | `applescript` |
+| --- | --- | --- |
+| How | Microsoft Graph `setUserPreferredPresence` | types a slash command into the command box (`Cmd+E`) |
+| Setup | one `devtools teams auth login` | Accessibility permission |
+| Steals focus | no | yes, briefly |
+| Works unattended | yes | only if Accessibility is granted to the *invoking* process |
+| `--revert-after` | enforced by Graph, process exits | blocks until the timer elapses |
+| Needs Teams running | yes, signed in somewhere | yes, and it will launch it |
+| `clear` | yes | no - the command box cannot un-set a status |
+
+Graph is the default, so `devtools teams away` fails with instructions until
+you have logged in. `devtools doctor` reports which transports are ready.
+
+### Graph login
 
 ```sh
-devtools teams set dnd --revert-after 45m             # back to available
-devtools teams set busy --revert-after 1h --revert-to away
+devtools teams auth login         # device code: open a URL, enter the code
+devtools teams auth status        # who, which tenant, scopes, expiry
+devtools teams auth logout        # delete the local token
 ```
 
-Tuning, for when a keystroke races the Electron UI on a cold app:
+The token lands in `~/.config/devtools/msgraph/token.json`, mode 0600, and
+refreshes itself. `Presence.ReadWrite` must be consented **at login**: Azure
+refuses to add a scope to an existing grant, so a token captured without it
+cannot be upgraded, only replaced.
+
+By default this authenticates as the **Azure CLI public client**, which needs
+no app registration because it is already consented in most tenants. That also
+means devtools presents itself to your tenant as the Azure CLI. To avoid that,
+register an Entra app with delegated `Presence.ReadWrite` and pass
+`--client-id` (and `--tenant` if you do not want `organizations`).
+
+The catch worth knowing: a preferred presence only applies while you have a
+*presence session*, which means signed in on a Teams client somewhere. With
+Teams closed, Graph reports you `Offline` regardless of what you set.
+
+### Timeboxed presence
 
 ```sh
-devtools teams away --activate-delay 1.5s --key-delay 300ms
-devtools teams away --app "Microsoft Teams classic"
+devtools teams set dnd --revert-after 45m    # graph: exits now, Graph expires it
+devtools teams set busy --revert-after 1h --revert-to away --via applescript
 ```
 
-### One-time setup
+On `graph`, `--revert-after` becomes Graph's `expirationDuration`: the process
+exits immediately and presence reverts to whatever Teams calculates. Because
+that fallback is always *calculated* presence, `--revert-to` cannot be honoured
+there and is rejected rather than ignored - use `--via applescript` for a
+targeted revert. Omit `--revert-after` entirely and Graph applies its own
+default: 1 day for busy and dnd, 7 days otherwise.
+
+`devtools teams clear` removes a preferred presence altogether. That is not the
+same as setting `available`, which pins you green; clearing lets Teams decide
+again.
+
+### AppleScript setup
 
 AppleScript keystrokes need Accessibility permission for whichever app runs
 devtools (your terminal, or `launchd` itself for scheduled runs):
@@ -314,13 +351,26 @@ devtools (your terminal, or `launchd` itself for scheduled runs):
 
 `devtools doctor` tells you whether that is in place. The first scheduled run
 may raise its own permission prompt, because launchd is a different requesting
-process than your terminal.
+process than your terminal. This is the whole reason `graph` is the default:
+scheduled presence changes do not need it.
+
+Focus returns to whatever app was frontmost when the change finishes; pass
+`--no-restore` to leave Teams in front. For when a keystroke races the Electron
+UI on a cold app:
+
+```sh
+devtools teams away --via applescript --activate-delay 1.5s --key-delay 300ms
+devtools teams away --via applescript --app "Microsoft Teams classic"
+```
 
 ## `devtools launchd` - scheduled agents
 
 Writes plists to `~/Library/LaunchAgents` and loads them into your GUI session.
 devtools only ever touches labels starting with `com.devtools.`, so your own
 agents are left alone.
+
+Scheduled presence changes are the reason `teams` defaults to Graph: a launchd
+agent needs no Accessibility grant of its own, and nothing has to stay running.
 
 ```sh
 # Look busy during working hours, away at the end of the day.
@@ -388,9 +438,10 @@ does not catch up on missed runs.
 main.go                  signal handling + root command
 internal/cli/            cobra command tree (one file per command group)
 internal/web/            the DNS -> TCP -> TLS -> HTTP chain walk
+internal/msgraph/        Graph device-code login, self-refreshing token, authenticated POST
 internal/castore/        keychain and wire CA extraction, vendor detection, PEM output
 internal/check/          shared assertion engine, report rendering, exit codes
-internal/teams/          presence states and AppleScript generation
+internal/teams/          presence states, Graph bodies and AppleScript generation
 internal/launchd/        plist rendering, schedule parsing, launchctl plumbing
 internal/crontab/        marker-scoped crontab editing
 internal/osx/            osascript wrapper and app/permission queries
