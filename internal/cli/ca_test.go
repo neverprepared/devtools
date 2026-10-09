@@ -11,10 +11,24 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
+
+// requireDarwin skips the tests that drive a scanning ca subcommand end to
+// end. scan() always loads Apple's root store, and the --no-login-keychain /
+// --no-system-keychain flags do not cover that read: there is no Apple root
+// store to load off macOS, so these exercise a macOS-only path by definition.
+// The portable half of the package (selection, PEM output) is covered
+// directly in internal/castore, which does run on Linux.
+func requireDarwin(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS != "darwin" {
+		t.Skip("the ca command reads Apple's root store from the macOS keychain")
+	}
+}
 
 // fixtureCA writes a self-signed CA PEM named cn and returns its path, so the
 // ca commands can be exercised without depending on this machine's keychain.
@@ -49,6 +63,7 @@ func fixtureCA(t *testing.T, cn string) string {
 var keychainless = []string{"--no-login-keychain", "--no-system-keychain"}
 
 func TestCAExportFromFileToStdout(t *testing.T) {
+	requireDarwin(t)
 	fixture := fixtureCA(t, "caadmin.netskope.com")
 
 	args := append([]string{"ca", "export", "--stdout", "--from-file", fixture}, keychainless...)
@@ -71,6 +86,7 @@ func TestCAExportFromFileToStdout(t *testing.T) {
 }
 
 func TestCAExportNoCommentsIsBarePEM(t *testing.T) {
+	requireDarwin(t)
 	fixture := fixtureCA(t, "Zscaler Root CA")
 
 	args := append([]string{"ca", "export", "--stdout", "--no-comments", "--from-file", fixture}, keychainless...)
@@ -87,6 +103,7 @@ func TestCAExportNoCommentsIsBarePEM(t *testing.T) {
 }
 
 func TestCAExportWritesFileAndVerifies(t *testing.T) {
+	requireDarwin(t)
 	fixture := fixtureCA(t, "caadmin.netskope.com")
 	dest := filepath.Join(t.TempDir(), "sub", "mitm.pem")
 
@@ -113,6 +130,7 @@ func TestCAExportWritesFileAndVerifies(t *testing.T) {
 }
 
 func TestCAExportUnknownCANeedsInclude(t *testing.T) {
+	requireDarwin(t)
 	fixture := fixtureCA(t, "Example Corp Internal Root")
 
 	// An internal CA no vendor list knows is not exported by default.
@@ -150,6 +168,7 @@ func TestCAExportRejectsBadInclude(t *testing.T) {
 }
 
 func TestCAExportDryRun(t *testing.T) {
+	requireDarwin(t)
 	fixture := fixtureCA(t, "caadmin.netskope.com")
 	dest := filepath.Join(t.TempDir(), "should-not-exist.pem")
 
@@ -167,6 +186,7 @@ func TestCAExportDryRun(t *testing.T) {
 }
 
 func TestCAListJSON(t *testing.T) {
+	requireDarwin(t)
 	fixture := fixtureCA(t, "caadmin.netskope.com")
 
 	args := append([]string{"ca", "list", "--json", "--from-file", fixture}, keychainless...)
@@ -196,6 +216,7 @@ func TestCAListJSON(t *testing.T) {
 }
 
 func TestCAListEmpty(t *testing.T) {
+	requireDarwin(t)
 	args := append([]string{"ca", "list"}, keychainless...)
 	out, err := run(t, args...)
 	if err != nil {
