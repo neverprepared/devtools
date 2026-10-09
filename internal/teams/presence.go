@@ -16,22 +16,40 @@ import (
 // Classic registers as "Microsoft Teams classic".
 const DefaultApp = "Microsoft Teams"
 
-// Status is one presence state reachable from the Teams command box.
+// Status is one presence state, in both vocabularies devtools can speak: the
+// slash command typed into the Teams command box, and the availability and
+// activity pair that Microsoft Graph's setUserPreferredPresence wants. Keeping
+// both on one struct is what stops the two transports drifting apart.
 type Status struct {
 	Name    string   // canonical name, used as the subcommand
 	Command string   // slash command typed into the command box
 	Summary string   // one-line help text
 	Aliases []string // alternate spellings accepted by Resolve
+
+	// Graph's API only accepts specific availability/activity combinations;
+	// see Availability and Activity on
+	// https://learn.microsoft.com/en-us/graph/api/presence-setuserpreferredpresence
+	Availability string
+	Activity     string
 }
 
-// Statuses are the presence states devtools knows how to set.
+// Statuses are the presence states devtools knows how to set. Every one maps
+// to a supported Graph availability/activity pair, so the two transports cover
+// exactly the same set.
 var Statuses = []Status{
-	{Name: "available", Command: "/available", Summary: "Set presence to Available (green)", Aliases: []string{"active", "online", "green", "free"}},
-	{Name: "away", Command: "/away", Summary: "Set presence to Away (yellow)", Aliases: []string{"idle", "yellow"}},
-	{Name: "busy", Command: "/busy", Summary: "Set presence to Busy (red)", Aliases: []string{"red"}},
-	{Name: "dnd", Command: "/dnd", Summary: "Set presence to Do not disturb", Aliases: []string{"donotdisturb", "do-not-disturb", "focus"}},
-	{Name: "brb", Command: "/brb", Summary: "Set presence to Be right back", Aliases: []string{"berightback", "be-right-back"}},
-	{Name: "offline", Command: "/offline", Summary: "Appear offline", Aliases: []string{"appearoffline", "invisible"}},
+	{Name: "available", Command: "/available", Summary: "Set presence to Available (green)", Aliases: []string{"active", "online", "green", "free"},
+		Availability: "Available", Activity: "Available"},
+	{Name: "away", Command: "/away", Summary: "Set presence to Away (yellow)", Aliases: []string{"idle", "yellow"},
+		Availability: "Away", Activity: "Away"},
+	{Name: "busy", Command: "/busy", Summary: "Set presence to Busy (red)", Aliases: []string{"red"},
+		Availability: "Busy", Activity: "Busy"},
+	{Name: "dnd", Command: "/dnd", Summary: "Set presence to Do not disturb", Aliases: []string{"donotdisturb", "do-not-disturb", "focus"},
+		Availability: "DoNotDisturb", Activity: "DoNotDisturb"},
+	{Name: "brb", Command: "/brb", Summary: "Set presence to Be right back", Aliases: []string{"berightback", "be-right-back"},
+		Availability: "BeRightBack", Activity: "BeRightBack"},
+	// Graph pairs Offline with OffWork, not with "Offline".
+	{Name: "offline", Command: "/offline", Summary: "Appear offline", Aliases: []string{"appearoffline", "invisible"},
+		Availability: "Offline", Activity: "OffWork"},
 }
 
 // Resolve maps a user-supplied name or alias to a Status.

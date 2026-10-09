@@ -27,8 +27,8 @@ func run(t *testing.T, args ...string) (string, error) {
 	return buf.String(), err
 }
 
-func TestTeamsDryRunPrintsScript(t *testing.T) {
-	out, err := run(t, "teams", "away", "--dry-run")
+func TestTeamsAppleScriptDryRunPrintsScript(t *testing.T) {
+	out, err := run(t, "teams", "away", "--dry-run", "--via", "applescript")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestTeamsDryRunPrintsScript(t *testing.T) {
 
 func TestTeamsAliasSubcommand(t *testing.T) {
 	// "active" is an alias of the available subcommand.
-	out, err := run(t, "teams", "active", "-n")
+	out, err := run(t, "teams", "active", "-n", "--via", "applescript")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,12 +51,107 @@ func TestTeamsAliasSubcommand(t *testing.T) {
 }
 
 func TestTeamsDelayFlagsReachTheScript(t *testing.T) {
-	out, err := run(t, "teams", "busy", "-n", "--activate-delay", "1.5s", "--key-delay", "300ms")
+	out, err := run(t, "teams", "busy", "-n", "--via", "applescript", "--activate-delay", "1.5s", "--key-delay", "300ms")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out, "delay 1.5") || !strings.Contains(out, "delay 0.3") {
 		t.Errorf("delay flags not applied:\n%s", out)
+	}
+}
+
+func TestTeamsGraphDryRunPrintsRequest(t *testing.T) {
+	// Graph is the default transport, so no --via is needed here.
+	out, err := run(t, "teams", "dnd", "--dry-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"POST /users/",
+		"presence/setUserPreferredPresence",
+		`"availability": "DoNotDisturb"`,
+		`"activity": "DoNotDisturb"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+	// No expiration was requested, so Graph's own default should apply.
+	if strings.Contains(out, "expirationDuration") {
+		t.Errorf("expirationDuration should be omitted when no hold is given:\n%s", out)
+	}
+}
+
+func TestTeamsGraphOfflineMapsToOffWork(t *testing.T) {
+	// The one status whose Graph activity differs from its availability.
+	out, err := run(t, "teams", "offline", "-n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `"availability": "Offline"`) || !strings.Contains(out, `"activity": "OffWork"`) {
+		t.Errorf("offline should map to Offline/OffWork:\n%s", out)
+	}
+}
+
+func TestTeamsGraphRevertAfterBecomesExpiration(t *testing.T) {
+	out, err := run(t, "teams", "set", "busy", "-n", "--revert-after", "45m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `"expirationDuration": "PT45M"`) {
+		t.Errorf("--revert-after should become an ISO 8601 expirationDuration:\n%s", out)
+	}
+	// Graph enforces the expiry, so nothing should claim it will wait.
+	if strings.Contains(out, "would wait") {
+		t.Errorf("graph transport should not block for the revert:\n%s", out)
+	}
+}
+
+func TestTeamsGraphRejectsRevertTo(t *testing.T) {
+	// Graph expiry always falls back to calculated presence, so a targeted
+	// revert cannot be honoured and must be refused rather than ignored.
+	out, err := run(t, "teams", "set", "busy", "-n", "--revert-after", "10m", "--revert-to", "away")
+	if err == nil {
+		t.Fatalf("--revert-to with --via graph should error:\n%s", out)
+	}
+	if !strings.Contains(err.Error(), "--revert-to is not supported") {
+		t.Errorf("error should name the unsupported flag, got: %v", err)
+	}
+}
+
+func TestTeamsAppleScriptRevertToStillWorks(t *testing.T) {
+	out, err := run(t, "teams", "set", "busy", "-n", "--via", "applescript",
+		"--revert-after", "10m", "--revert-to", "away")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "would wait 10m0s then set presence to away") {
+		t.Errorf("applescript revert should still block and target a status:\n%s", out)
+	}
+}
+
+func TestTeamsClearRequiresGraph(t *testing.T) {
+	if _, err := run(t, "teams", "clear", "-n", "--via", "applescript"); err == nil {
+		t.Error("clear via applescript should error: the command box cannot un-set a status")
+	}
+}
+
+func TestTeamsUnknownTransport(t *testing.T) {
+	if _, err := run(t, "teams", "away", "-n", "--via", "telepathy"); err == nil {
+		t.Error("an unknown --via should error")
+	}
+}
+
+func TestTeamsStatusesListsGraphMapping(t *testing.T) {
+	out, err := run(t, "teams", "statuses")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Every status must carry a Graph mapping, or the two transports have drifted.
+	for _, want := range []string{"DoNotDisturb", "BeRightBack", "Offline/OffWork"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("statuses output missing %q:\n%s", want, out)
+		}
 	}
 }
 

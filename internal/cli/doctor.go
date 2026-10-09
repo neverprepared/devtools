@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/neverprepared/devtools/internal/launchd"
+	"github.com/neverprepared/devtools/internal/msgraph"
 	"github.com/neverprepared/devtools/internal/osx"
 	"github.com/neverprepared/devtools/internal/teams"
 )
@@ -26,11 +28,13 @@ func newDoctorCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "doctor",
 		Short: "Check the prerequisites devtools depends on",
-		Long:  "Verify the local prerequisites: macOS, osascript, Accessibility permission, the Teams client, and launchctl.",
+		Long:  "Verify the local prerequisites: the Microsoft Graph login, macOS, osascript, Accessibility permission, the Teams client, and launchctl.",
 		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
 			ctx := c.Context()
-			results := []checkResult{platformCheck()}
+			// Graph is just HTTPS, so this applies on every platform and
+			// belongs outside the macOS-only block below.
+			results := []checkResult{platformCheck(), graphAuthCheck()}
 			if osx.Supported() {
 				results = append(results,
 					binaryCheck("osascript"),
@@ -69,6 +73,45 @@ func newDoctorCmd() *cobra.Command {
 			return fmt.Errorf("%d of %d checks failed", failed, len(results))
 		},
 	}
+}
+
+// graphAuthCheck reports whether the default transport is ready. It is a
+// failure when absent because --via graph is the default; the fix names the
+// AppleScript alternative so the message is actionable either way.
+func graphAuthCheck() checkResult {
+	const name = "graph auth (teams --via graph)"
+
+	path, err := msgraph.TokenPath()
+	if err != nil {
+		return checkResult{Name: name, Detail: err.Error()}
+	}
+	t, err := msgraph.LoadToken(path)
+	if errors.Is(err, msgraph.ErrNoToken) {
+		return checkResult{
+			Name:   name,
+			Detail: "not signed in",
+			Fix:    "devtools teams auth login   (or use --via applescript, which needs no login)",
+		}
+	}
+	if err != nil {
+		return checkResult{Name: name, Detail: "unreadable: " + err.Error(),
+			Fix: "devtools teams auth logout && devtools teams auth login"}
+	}
+	if !t.HasScope(msgraph.PresenceScope) {
+		return checkResult{
+			Name:   name,
+			Detail: "signed in as " + t.Account + ", but without " + msgraph.PresenceScope,
+			Fix:    "Azure cannot add a scope to an existing grant: devtools teams auth logout && devtools teams auth login",
+		}
+	}
+	if t.RefreshToken == "" {
+		return checkResult{
+			Name:   name,
+			Detail: "signed in as " + t.Account + ", but no refresh token stored",
+			Fix:    "sign in again so offline_access is granted: devtools teams auth login",
+		}
+	}
+	return checkResult{Name: name, OK: true, Detail: "signed in as " + t.Account}
 }
 
 func platformCheck() checkResult {
