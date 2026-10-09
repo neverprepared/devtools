@@ -59,6 +59,35 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # The signing script no-ops when MACOS_IDENTITY is unset, which is right
+      # for a local --snapshot and wrong for a tag: it would publish an
+      # unsigned release that looks successful. Fail here instead.
+      - name: Require signing secrets
+        env:
+          REQUIRED: >-
+            MACOS_CERTIFICATE MACOS_CERTIFICATE_PWD MACOS_IDENTITY KEYCHAIN_PWD
+            APPLE_ID APPLE_APP_PASSWORD APPLE_TEAM_ID
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          MACOS_IDENTITY: ${{ secrets.MACOS_IDENTITY }}
+          KEYCHAIN_PWD: ${{ secrets.KEYCHAIN_PWD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          missing=""
+          for name in $REQUIRED; do
+            # Indirect expansion tests presence without ever printing a value.
+            if [ -z "${!name:-}" ]; then
+              missing="$missing $name"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::cannot publish a signed release; unset secrets:$missing"
+            exit 1
+          fi
+          echo "all signing secrets present"
+
       # runner.temp is not available in job-level env, so publish the path
       # once here for every later step to share.
       - name: Set signing paths
