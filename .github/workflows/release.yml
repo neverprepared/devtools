@@ -35,13 +35,19 @@ jobs:
   release:
     name: goreleaser
     needs: test
-    runs-on: ubuntu-latest
+    # macOS, not ubuntu: codesign and notarytool only exist here. Deliberately
+    # the hosted image rather than the org's self-hosted pool - pinning a
+    # hosted macOS version has gone stale twice, and signing on a persistent
+    # runner mutates host keychain state.
+    runs-on: macos-latest
     permissions:
       # REQUIRED. This org's default GITHUB_TOKEN is read-only, and the
       # release upload fails with "Resource not accessible by integration"
       # without it. Note Actions runs the workflow file as of the TAGGED
       # commit, so a fix here must land on main before the tag is pushed.
       contents: write
+    env:
+      NOTARY_PROFILE: devtools-notary
     steps:
       - uses: actions/checkout@v7
         with:
@@ -53,6 +59,63 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # runner.temp is not available in job-level env, so publish the path
+      # once here for every later step to share.
+      - name: Set signing paths
+        run: echo "KEYCHAIN_PATH=$RUNNER_TEMP/signing.keychain-db" >> "$GITHUB_ENV"
+
+      - name: Import Developer ID certificate
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          KEYCHAIN_PWD: ${{ secrets.KEYCHAIN_PWD }}
+        run: |
+          # Record the search list BEFORE touching it so teardown can restore
+          # it. Pointless on a discarded hosted VM, essential if this workflow
+          # ever moves to a persistent runner: otherwise every later job on
+          # that host points at a keychain deleted when this one ended.
+          security list-keychains -d user | tr -d ' "' > "$RUNNER_TEMP/keychains.orig"
+
+          security create-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
+
+          printf '%s' "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" \
+            -k "$KEYCHAIN_PATH" \
+            -P "$MACOS_CERTIFICATE_PWD" \
+            -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/certificate.p12"
+
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -s \
+            -k "$KEYCHAIN_PWD" \
+            "$KEYCHAIN_PATH"
+
+          # Prepend ours, keeping whatever was already there.
+          # shellcheck disable=SC2046  # intentional word splitting, one path per line
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(cat "$RUNNER_TEMP/keychains.orig")
+
+      - name: Store notary credentials
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          KEYCHAIN_PWD: ${{ secrets.KEYCHAIN_PWD }}
+        run: |
+          security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
+
+          # notarytool has no @env: form for --password, so this single call is
+          # the narrowest available argv exposure: every later `submit` passes
+          # only the profile name. --validate is on by default, so bad
+          # credentials fail here rather than deep inside the release.
+          xcrun notarytool store-credentials "$NOTARY_PROFILE" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --keychain "$KEYCHAIN_PATH"
+
       - uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
@@ -60,3 +123,18 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Consumed by scripts/sign-and-notarize.sh via binary_signs. With
+          # MACOS_IDENTITY unset the script no-ops; here it must not, so a
+          # missing secret fails the release rather than shipping unsigned.
+          MACOS_IDENTITY: ${{ secrets.MACOS_IDENTITY }}
+          NOTARY_KEYCHAIN_PROFILE: ${{ env.NOTARY_PROFILE }}
+          NOTARY_KEYCHAIN: ${{ env.KEYCHAIN_PATH }}
+
+      - name: Restore keychain search list
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/keychains.orig" ]; then
+            # shellcheck disable=SC2046  # intentional word splitting
+            security list-keychains -d user -s $(cat "$RUNNER_TEMP/keychains.orig") || true
+          fi
+          security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
